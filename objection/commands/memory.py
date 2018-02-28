@@ -1,4 +1,4 @@
-import click
+import click, traceback
 from tabulate import tabulate
 
 from ..utils.frida_transport import FridaRunner
@@ -49,23 +49,15 @@ def dump_all(args: list) -> None:
     ranges = session.enumerate_ranges(access)
 
     total_size = sum([x.size for x in ranges])
+
     click.secho('Will dump {0} {1} images, totalling {2}'.format(
         len(ranges), access, sizeof_fmt(total_size)), fg='green', dim=True)
-
+    #print(ranges)
     with click.progressbar(ranges, label='Preparing to dump images') as bar:
-
         for image in bar:
             bar.label = 'Dumping {0} from base: {1}'.format(sizeof_fmt(image.size), hex(image.base_address))
-
-            # grab the (size) bytes starting at the (base_address)
-            dump = session.read_bytes(image.base_address, image.size)
-
-            # append the results to the destination file
-            with open(destination, 'ab') as f:
-                f.write(dump)
-
+            split_memory(session, image.base_address, image.size, destination)
     click.secho('Memory dumped to file: {0}'.format(destination), fg='green')
-
 
 def dump_from_base(args: list) -> None:
     """
@@ -94,13 +86,46 @@ def dump_from_base(args: list) -> None:
     session = runner.get_session()
 
     # grab the (size) bytes starting at the (base_address)
-    dump = session.read_bytes(int(base_address, 16), int(memory_size))
-
-    # append the results to the destination file
-    with open(destination, 'ab') as f:
-        f.write(dump)
-
+    split_memory(session, int(base_address,16), int(memory_size), destination)
+   
     click.secho('Memory dumped to file: {0}'.format(destination), fg='green')
+
+"""
+    Function to split memory in chunks of MAX_SIZE.
+    Based on:
+        https://github.com/Nightbringer21/fridump
+
+"""
+def split_memory(session, base_address, size, destination):
+
+    chunk_size = 20971520 #Chunk size
+    current_address = base_address
+
+    chunks = int(size / chunk_size)
+    
+    file = open(destination, 'ab') #Appends to the same file
+    for chunk in range(chunks):
+        current_address += dump_mem(session, file, current_address, chunk_size)
+
+    #Check last chunk. If it is not 0 it means that we have less than a chunk and we h$
+    diff = size % chunk_size
+
+    if diff is not 0:
+        dump_mem(session, file, current_address, diff)
+
+    file.close()
+
+
+def dump_mem(session, file, current_address, chunk_size):
+    #Possible access violation while dumping module memory
+    try:
+        dump = session.read_bytes(current_address, chunk_size)
+        file.write(dump)
+    except:
+        click.secho('Access Violation: {0}'.format(hex(current_address)), fg='red')
+        pass
+
+    return chunk_size
 
 
 def list_modules(args: list = None) -> None:
@@ -234,3 +259,4 @@ def write(args: list) -> None:
         destination=destination, pattern=pattern)
 
     runner.run()
+
